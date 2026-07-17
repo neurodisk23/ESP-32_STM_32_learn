@@ -28,30 +28,32 @@ async def scan_and_choose(name_filter=None, address=None):
         return address
 
     print("Scanning for BLE devices (5 s)...\n")
-    devices = await BleakScanner.discover(timeout=5.0)
-    if not devices:
+    # return_adv=True gives {address: (BLEDevice, AdvertisementData)}.
+    # RSSI lives on AdvertisementData in modern bleak, not on BLEDevice.
+    discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
+    if not discovered:
         print("No BLE devices found. Is Bluetooth on? Is the shirt powered and worn?")
         sys.exit(1)
 
-    # Sort by signal strength (strongest first) for convenience.
-    devices = sorted(devices, key=lambda d: (d.rssi if d.rssi is not None else -999),
-                     reverse=True)
+    # Build a list of (device, rssi), strongest signal first.
+    pairs = [(dev, adv.rssi) for dev, adv in discovered.values()]
+    pairs.sort(key=lambda p: p[1] if p[1] is not None else -999, reverse=True)
 
     if name_filter:
-        for d in devices:
-            if d.name and name_filter.lower() in d.name.lower():
-                print(f"Auto-selected: {d.name} [{d.address}]")
-                return d.address
+        for dev, _ in pairs:
+            if dev.name and name_filter.lower() in dev.name.lower():
+                print(f"Auto-selected: {dev.name} [{dev.address}]")
+                return dev.address
         print(f"No device matched name '{name_filter}'. Falling back to manual pick.\n")
 
     print(f"{'#':>2}  {'NAME':<28}  {'ADDRESS':<20}  RSSI")
     print("-" * 62)
-    for i, d in enumerate(devices):
-        print(f"{i:>2}  {(d.name or '(unknown)'):<28}  {d.address:<20}  {d.rssi}")
+    for i, (dev, rssi) in enumerate(pairs):
+        print(f"{i:>2}  {(dev.name or '(unknown)'):<28}  {dev.address:<20}  {rssi}")
 
     choice = input("\nEnter the number of the shirt: ").strip()
     try:
-        return devices[int(choice)].address
+        return pairs[int(choice)][0].address
     except (ValueError, IndexError):
         print("Invalid choice.")
         sys.exit(1)
