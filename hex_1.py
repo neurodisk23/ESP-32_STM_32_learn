@@ -61,41 +61,60 @@ async def scan_and_choose(name_filter=None, address=None):
 
 async def discover(address):
     print(f"\nConnecting to {address} ...")
-    async with BleakClient(address) as client:
-        if not client.is_connected:
-            print("Failed to connect.")
-            return
-        print("Connected. Reading GATT table...\n")
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            # Longer timeout + explicit settle delay helps BlueZ finish
+            # service discovery before the device drops the link.
+            async with BleakClient(address, timeout=30.0) as client:
+                if not client.is_connected:
+                    print(f"Attempt {attempt}: not connected, retrying...")
+                    await asyncio.sleep(2)
+                    continue
+                print("Connected. Letting link settle...")
+                await asyncio.sleep(2)
+                print("Reading GATT table...\n")
+                await _dump_services(client)
+                return
+        except Exception as e:
+            last_err = e
+            print(f"Attempt {attempt} failed: {e}")
+            await asyncio.sleep(3)
+    print(f"\nAll attempts failed. Last error: {last_err}")
+    print("If this is 'device disconnected', pair the device first with "
+          "bluetoothctl (pair + trust), then re-run.")
 
-        rows = []
-        header = f"{'SERVICE':<38}  {'CHAR UUID':<38}  {'PROPERTIES'}"
-        print(header)
-        print("-" * len(header))
 
-        for service in client.services:
-            for char in service.characteristics:
-                props = ",".join(char.properties)
-                notify = "notify" in char.properties or "indicate" in char.properties
-                print(f"{service.uuid:<38}  {char.uuid:<38}  {props}")
-                rows.append({
-                    "service_uuid": service.uuid,
-                    "service_desc": service.description,
-                    "char_uuid": char.uuid,
-                    "char_desc": char.description,
-                    "properties": props,
-                    "notify_capable": notify,
-                })
+async def _dump_services(client):
+    rows = []
+    header = f"{'SERVICE':<38}  {'CHAR UUID':<38}  {'PROPERTIES'}"
+    print(header)
+    print("-" * len(header))
 
-        with open("gatt_map.csv", "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
-            writer.writeheader()
-            writer.writerows(rows)
+    for service in client.services:
+        for char in service.characteristics:
+            props = ",".join(char.properties)
+            notify = "notify" in char.properties or "indicate" in char.properties
+            print(f"{service.uuid:<38}  {char.uuid:<38}  {props}")
+            rows.append({
+                "service_uuid": service.uuid,
+                "service_desc": service.description,
+                "char_uuid": char.uuid,
+                "char_desc": char.description,
+                "properties": props,
+                "notify_capable": notify,
+            })
 
-        notify_chars = [r for r in rows if r["notify_capable"]]
-        print(f"\nWrote {len(rows)} characteristics to gatt_map.csv")
-        print(f"{len(notify_chars)} of them support notify/indicate (streamable):\n")
-        for r in notify_chars:
-            print(f"  {r['char_uuid']}  ({r['char_desc']})")
+    with open("gatt_map.csv", "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    notify_chars = [r for r in rows if r["notify_capable"]]
+    print(f"\nWrote {len(rows)} characteristics to gatt_map.csv")
+    print(f"{len(notify_chars)} of them support notify/indicate (streamable):\n")
+    for r in notify_chars:
+        print(f"  {r['char_uuid']}  ({r['char_desc']})")
 
 
 async def main():
